@@ -1,0 +1,50 @@
+time_points
+300000
+space_points
+1000
+media_start
+200
+media_end
+800
+media_number
+0
+time_samps
+100
+reflector start
+1000
+reflector length
+4000
+reflector layers
+5
+reflector index
+16.0
+reflector configuration 1 - both mirrors, 2 - only left 
+0
+omega
+ 3.00000000000000E+0015
+gama
+ 1.00000000000000E+0013
+na
+ 5.00000000000000E+0026
+delta
+ 2.00000000000000E+0011
+delta1
+-2.00000000000000E+0011
+gama_nr
+ 3.00000000000000E+0008
+dab
+-1.90000000000000E-0029
+N0
+ 0.00000000000000E+0000
+N11
+ 1.00000000000000E+0000
+Tp
+ 2.00000000000000E-0014
+w0
+ 2.00000000000000E+0015
+E0
+ 1.00000000000000E+0005
+step_lambda_rate
+ 2.00000000000000E-0002
+z_out_time
+900
