@@ -9,6 +9,7 @@
 #include <time.h>
 #include <vector>
 #include <exception>
+#include "twolevel_fdtd.h"
 
 
 using namespace std;
@@ -25,6 +26,7 @@ int  ref_start, ref_length, ref_layers,ref_config;
 static double omega,gama,na,delta,delta1,gama_nr,dab,N0,N11,Tp,w0,E0,step_lambda_rate;
 double reflector_index;
 int z_out_time;
+
 
 
 void readln(FILE * f)
@@ -161,6 +163,9 @@ int main(int argc, char* argv[])
 	//store inverted epsilon data to speedup computations
 	double media[3]= {1.0,1/reflector_index,1/(0.2*reflector_index)};
 	double media_pump[3]= {0,delta,delta1};
+
+	two_level_params active_medium_params[2];
+	vector<int> two_level_par_index(space_points+2*Nabc, 0);
 
 
 	//wid=round(lambda/(4*dz*sqrt(media[1])));
@@ -330,6 +335,7 @@ int main(int argc, char* argv[])
 	delta = StrToFloat(ParamStr(1));
 	*/
 	//precalculated media parameters
+/*
 	const double     p1=(2-omega0sqr*dt*dt)/(1+gama*dt);
 	const double    p2=(1-gama*dt)/(1+gama*dt);
 	const double p3=omega0sqr*dt*dt/(h11*omega*(1+gama*dt));
@@ -342,6 +348,31 @@ int main(int argc, char* argv[])
 	const double kp= p3*dab;
 	const double ke= 2*na*dab;
 	const double kn= n3*dab;
+*/	
+
+	memset(active_medium_params, 0, sizeof(active_medium_params));
+	
+	active_medium_params[1].p1=(2-omega0sqr*dt*dt)/(1+gama*dt);
+	active_medium_params[1].p2=(1-gama*dt)/(1+gama*dt);
+	active_medium_params[1].p3=omega0sqr*dt*dt/(h11*omega*(1+gama*dt));
+
+	active_medium_params[1].n1=(2-gama_nr*dt)/(2+gama_nr*dt);
+	active_medium_params[1].n2 = 2*dt*(-2*delta+gama_nr*N0)/(2+gama_nr*dt);
+	active_medium_params[1].n3 = 4*omega/(h11*omega0sqr*(2+gama_nr*dt));
+
+
+	active_medium_params[1].kp= active_medium_params[0].p3*dab;
+	active_medium_params[1].ke= 2*na*dab;
+	active_medium_params[1].kn= active_medium_params[0].n3*dab;
+
+//init indices
+	for (int m=media_start; m<= media_end-1;m++)
+	{
+		two_level_par_index[m] = 1;
+	}
+
+	
+	
 
 	//excitation pulse inserted at z = zin
 	long zin = 100;
@@ -402,17 +433,9 @@ int main(int argc, char* argv[])
 
 
 				//main grid electric field
-				for (int m= Nabc ;m<=media_start-1;m++)
-				{
-					D[m]=D[m] + Dup*( H[m] - H[m-1] );
-					E[m]=D[m]*media[eps_r[m]];
-				}
-
-
-
-
-				//#pragma omp parallel for 
-				for (int m=media_start; m<= media_end-1;m++)
+				
+			 
+				for (int m= Nabc; m<= space_points+Nabc-1;m++)
 				{
 					// n2 = 2*dt*(-2*media_pump[pump[m]]+gama_nr*N0)/(2+gama_nr*dt);
 
@@ -423,18 +446,16 @@ int main(int argc, char* argv[])
 					Pold[m]=P[m];
 					//here product of sqrt(eps0) added
 
-					P[m] = p1*P[m]-p2*Pold2[m]+kp*E[m]*N[m];
+					P[m] = active_medium_params[two_level_par_index[m]].p1*P[m]-
+						active_medium_params[two_level_par_index[m]].p2*Pold2[m]+
+						active_medium_params[two_level_par_index[m]].kp*E[m]*N[m];
 					//save electric field for previous time step
 					double  Eprevt=E[m];
-					E[m]=(D[m]-ke*P[m])*media[eps_r[m]];
-					N[m]=n1*N[m]+n2-kn*(E[m]+Eprevt)*(P[m]-Pold[m]);
+					E[m]=(D[m]-active_medium_params[two_level_par_index[m]].ke*P[m])*media[eps_r[m]];
+					N[m]=active_medium_params[two_level_par_index[m]].n1*N[m]+
+						active_medium_params[two_level_par_index[m]].n2-
+						active_medium_params[two_level_par_index[m]].kn*(E[m]+Eprevt)*(P[m]-Pold[m]);
 
-				}
-
-				for (int m=media_end; m<= space_points+Nabc-1; m++)
-				{
-					D[m]=D[m] + Dup*( H[m] - H[m-1] );
-					E[m]=D[m]*media[eps_r[m]];
 				}
 
 
