@@ -2,19 +2,21 @@
 //
 
 #include <stdio.h>
+#include <memory.h>
 
 #define M_PI       3.14159265358979323846
 #include <math.h>
 #include <stdlib.h>
 #include <time.h>
-#include <vector>
 #include <exception>
 #include "twolevel_fdtd.h"
 
 
+#pragma warning(disable:4996)
+
+
+
 using namespace std;
-
-
 
 
 
@@ -140,33 +142,19 @@ int main(int argc, char* argv[])
 
 	//allocate arrays
 	int res = 0;
-	vector<double> E(space_points+2*Nabc, 0);
-	vector<double> H(space_points+2*Nabc, 0);
-	vector<double> B(space_points+2*Nabc, 0);
-	vector<double> D(space_points+2*Nabc, 0);
-	vector<double> P(space_points+1+2*Nabc, 0);
-	vector<double> Pold(space_points+1+2*Nabc,0);
-	vector<double> Pold2(space_points+1+2*Nabc,0);
-	vector<double> N(space_points+1+2*Nabc, 0);
-	vector<double> Ein(pulse_points, 0);
-	vector<double> Hin(pulse_points, 0);
-
-
-	vector<double> sigma(Nabc, 0);
-	vector<double> k(Nabc, 0);
-	vector<double> a1(Nabc, 0);
-	vector<double> b1(Nabc, 0);
-	vector<double> c1(Nabc, 0);
-	vector<double> d1(Nabc, 0);
-	vector<int> eps_r(space_points+2*Nabc, 0);
-	vector<int> pump(space_points+2*Nabc, 0);
+	
 	//store inverted epsilon data to speedup computations
 	double media[3]= {1.0,1/reflector_index,1/(0.2*reflector_index)};
 	double media_pump[3]= {0,delta,delta1};
-
 	two_level_params active_medium_params[2];
-	vector<int> two_level_par_index(space_points+2*Nabc, 0);
 
+	FdtdFields *fdtd_fields = (FdtdFields*)malloc((space_points+2*Nabc)*sizeof(FdtdFields));
+	memset(fdtd_fields, 0, (space_points+2*Nabc)*sizeof(FdtdFields));
+	PMLParams *pml = (PMLParams*)malloc(Nabc*sizeof(PMLParams));
+	SourceFields * source = (SourceFields*)malloc(sizeof(SourceFields)*time_points);
+	MediaParamsIndex * paramsIndex = (MediaParamsIndex *)malloc(sizeof(MediaParamsIndex)*(space_points+2*Nabc));
+	memset(paramsIndex, 0, sizeof(MediaParamsIndex)*(space_points+2*Nabc));
+	
 
 	//wid=round(lambda/(4*dz*sqrt(media[1])));
 	long wid2=(long)(lambda/(4*dz*sqrt(media[2])));
@@ -182,13 +170,13 @@ int main(int argc, char* argv[])
 				//left mirror--------
 				//first material
 				for (int i= ref_start+(wid+wid2)*j;i<=ref_start+(wid+wid2)*j+wid;i++)
-					eps_r[i]=1;
+					paramsIndex[i].eps_r=1;
 				//second material
 				for (int i= ref_start+(wid+wid2)*j+wid;i<=ref_start+(wid+wid2)*j+wid+wid2;i++)
-					eps_r[i]=2;
+					paramsIndex[i].eps_r=2;
 				//right mirror-------
 				for (int i= ref_start+2*wid*(ref_layers-1)+wid+ref_length+2*wid*j; i<= ref_start+2*wid*(ref_layers-1)+wid+ref_length+2*wid*j+wid; i++)
-					eps_r[i]=1;
+					paramsIndex[i].eps_r=1;
 			}
 			break;
 		}
@@ -200,10 +188,10 @@ int main(int argc, char* argv[])
 				//left mirror--------
 				//first material
 				for (int i= ref_start+(wid+wid2)*j;i<=ref_start+(wid+wid2)*j+wid;i++)
-					eps_r[i]=1;
+					paramsIndex[i].eps_r=1;
 				//second material
 				for (int i= ref_start+(wid+wid2)*j+wid;i<=ref_start+(wid+wid2)*j+wid+wid2;i++)
-					eps_r[i]=2;
+					paramsIndex[i].eps_r=2;
 			}
 
 		}
@@ -214,12 +202,12 @@ int main(int argc, char* argv[])
 			//bulk media with reflecting edges
 			for (int i=0; i<=space_points-1+Nabc+Nabc; i++)
 			{
-				eps_r[i]= 0;
+				paramsIndex[i].eps_r= 0;
 			}
 
 			for (int j= media_start-media_length;j<=media_end+media_length-1;j++)
 			{
-				eps_r[j]= 1;
+				paramsIndex[j].eps_r= 1;
 			}
 		}
 
@@ -231,7 +219,7 @@ int main(int argc, char* argv[])
 	FILE *eps = fopen("eps.txt","wt");
 	for(int i=0; i<space_points+2*Nabc; i++)
 	{
-		fprintf(eps,"%ld\n", eps_r[i]);
+		fprintf(eps,"%ld\n", paramsIndex[i].eps_r);
 	}
 	fclose(eps);
 
@@ -240,17 +228,17 @@ int main(int argc, char* argv[])
 
 	for (int j=media_start; j<=media_start+delta_number-1;j++)
 	{
-		pump[j]=1;
+		paramsIndex[j].pump=1;
 	}
 
 	for (int j=media_start+delta_number; j<=media_end-1-delta_number;j++)
 	{
-		pump[j]=2;
+		paramsIndex[j].pump=2;
 	}
 
 	for (int j=media_end-delta_number;j<=media_end-1;j++)
 	{
-		pump[j]=1;
+		paramsIndex[j].pump=1;
 	}
 
 	/*
@@ -277,19 +265,19 @@ int main(int argc, char* argv[])
 
 	for (int i = media_start; i<=media_end-1;i++)
 	{
-		N[i]=N11;
+		fdtd_fields[i].N=N11;
 	}
 
 	srand(  time(NULL));
 	for (int i = media_start; i<= media_end-1; i++)
 	{
-		P[i]=sin(w0*i*dt/*+2*M_PI*((double)rand()/(double)RAND_MAX)*/);
+		fdtd_fields[i].P=sin(w0*i*dt/*+2*M_PI*((double)rand()/(double)RAND_MAX)*/);
 	}
 
 	FILE *pstart = fopen("po.txt","wt");
 	for(int i=0; i< space_points+2*Nabc+1; i++)
 	{
-		fprintf(pstart,"%.15e\n",P[i]);
+		fprintf(pstart,"%.15e\n",fdtd_fields[i].P);
 	}
 	fclose(pstart);
 	
@@ -298,32 +286,32 @@ int main(int argc, char* argv[])
 
 
 	//hyperbolic secant pulse
-	/*
-	{ for nq=0 to pulse_points-1 do
+	
+	for(int  nq=0; nq< pulse_points; nq++)
 	{
-	t=nq*dt;
-	//G=0.5*(t-Tp)/(Tp);
-	Ein[nq] = E0*sin( w0*t )/cosh(10*(t-0.75*Tp)/Tp);
-	Hin[nq] = E0*sin( w0*(t+Hdelay) )/cosh(10*(t+Hdelay-0.75*Tp)/Tp);
-	writeln(epulse,  Ein[nq], Hin[nq]);
+		double t=nq*dt;
+		//G=0.5*(t-Tp)/(Tp);
+		source[nq].Ein = E0*sin( w0*t )/cosh(10*(t-0.75*Tp)/Tp);
+		source[nq].Hin = E0*sin( w0*(t+Hdelay) )/cosh(10*(t+Hdelay-0.75*Tp)/Tp);
+
 	}
-	closeFile(epulse);}
-	*/
+	
+	
 
 	//pml parameters calculation
 	double abc_pow = 3;
 	double kmax=2;
-	double sigma_max = -(abc_pow+1)*log(0.0001)*c/(2*/*eta0**/Labc); //2e16;
+	double sigma_max = -(abc_pow+1)*log(0.0001)*c/(2*/*eta0*/Labc); //2e16;
 	for (int i=0; i<= Nabc-1; i++)
 	{
-		sigma[i] =  sigma_max*pow(i/Nabc, abc_pow)/**mu0/eps0*/;
-		k[i]=1+(kmax-1)*pow(i/Nabc, abc_pow);
+		pml[i].sigma =  sigma_max*pow(i/Nabc, abc_pow)/**mu0/eps0*/;
+		pml[i].k=1+(kmax-1)*pow(i/Nabc, abc_pow);
 		//sigma[i]=0;
 		//k[i]=1;
-		a1[i]= k[i]+0.5*sigma[i]*dt;
-		b1[i]= 1/a1[i];//1/(k[i]+0.5*sigma[i]*dt);
-		c1[i]= k[i]-0.5*sigma[i]*dt;
-		d1[i]= c1[i]/a1[i];//(k[i]-0.5*sigma[i]*dt)/(k[i]+0.5*sigma[i]*dt);
+		pml[i].a1= pml[i].k+0.5*pml[i].sigma*dt;
+		pml[i].b1= 1/pml[i].a1;//1/(k[i]+0.5*sigma[i]*dt);
+		pml[i].c1= pml[i].k-0.5*pml[i].sigma*dt;
+		pml[i].d1= pml[i].c1/pml[i].a1;//(k[i]-0.5*sigma[i]*dt)/(k[i]+0.5*sigma[i]*dt);
 
 		//writeln(polarization,' ', a1[i],'  ',b1[i],' ',c1[i],'  ',d1[i],' ',sigma[i],' ',k[i]);
 	}
@@ -368,14 +356,14 @@ int main(int argc, char* argv[])
 //init indices
 	for (int m=media_start; m<= media_end-1;m++)
 	{
-		two_level_par_index[m] = 1;
+		paramsIndex[m].two_level_par_index = 1;
 	}
 
 	
 	
 
 	//excitation pulse inserted at z = zin
-	long zin = 100;
+	long zin = 150;
 	
 	FILE *etime = fopen("etime.txt","wt");
 	FILE *inversion_time = fopen("inversion.txt","wt");
@@ -399,36 +387,41 @@ int main(int argc, char* argv[])
 				for (int m= 0;m<=Nabc-1;m++)
 				{
 					int j=-m+Nabc-1;
-					double Bold = B[m];
-					B[m]= d1[j]*B[m]+(dt*c*b1[j]/dz)*(E[m+1]-E[m]); //E[m]-E[m-1]
-					H[m]= d1[j]*H[m]+b1[j]*(a1[j]*B[m]-c1[j]*Bold);
+					double Bold = fdtd_fields[m].B;
+					fdtd_fields[m].B= pml[j].d1*fdtd_fields[m].B + (dt*c*pml[j].b1/dz)*(fdtd_fields[m+1].E-fdtd_fields[m].E); //E[m]-E[m-1]
+					fdtd_fields[m].H= pml[j].d1*fdtd_fields[m].H+pml[j].b1*(pml[j].a1*fdtd_fields[m].B-pml[j].c1*Bold);
 				}
 
 				//main grid magnetic field
 
 				for (int m=Nabc; m<= Nabc+space_points-1;m++)
 				{
-					B[m]=B[m] + Hup*( E[m+1]-E[m] );
-					H[m] = B[m];
+					fdtd_fields[m].B = fdtd_fields[m].B + Hup*( fdtd_fields[m+1].E-fdtd_fields[m].E );
+					fdtd_fields[m].H = fdtd_fields[m].B;
 				}
 
 				// right PML magnetic field
 				for (int m= space_points+Nabc; m<= space_points + Nabc+ Nabc-2;m++)
 				{
-					double Bold = B[m];
-					B[m]= d1[m-space_points-Nabc]*B[m]+(dt*c*b1[m-space_points-Nabc]/dz)*(E[m+1]-E[m]); //E[m]-E[m-1]
-					H[m]= d1[m-space_points-Nabc]*H[m]+b1[m-space_points-Nabc]*(a1[m-space_points-Nabc]*B[m]-c1[m-space_points-Nabc]*Bold);
+					double Bold = fdtd_fields[m].B;
+					int j = m-space_points-Nabc;
+					fdtd_fields[m].B =
+						pml[j].d1*fdtd_fields[m].B+(dt*c*pml[j].b1/dz)*(fdtd_fields[m+1].E-fdtd_fields[m].E); //E[m]-E[m-1]
+					fdtd_fields[m].H =
+						pml[j].d1*fdtd_fields[m].H+pml[j].b1*(pml[j].a1*fdtd_fields[m].B-pml[j].c1*Bold);
 				}
-
 
 
 				//left PML electric field
 				for (int m= 1; m<= Nabc-1; m++)
 				{
 
-					double Dold=D[m];
-					D[m]= d1[-m+Nabc-1]*D[m]+(dt*c*b1[-m+Nabc-1]/dz)*(H[m]-H[m-1]);
-					E[m]= d1[-m+Nabc-1]*E[m]+b1[-m+Nabc-1]*(a1[-m+Nabc-1]*D[m]-c1[-m+Nabc-1]*Dold);
+					double Dold=fdtd_fields[m].D;
+					int j = -m+Nabc-1;
+					fdtd_fields[m].D= 
+						pml[j].d1*fdtd_fields[m].D+(dt*c*pml[j].b1/dz)*(fdtd_fields[m].H-fdtd_fields[m-1].H);
+					fdtd_fields[m].E=
+						pml[j].d1*fdtd_fields[m].E+pml[j].b1*(pml[j].a1*fdtd_fields[m].D-pml[j].c1*Dold);
 				}
 
 
@@ -437,35 +430,40 @@ int main(int argc, char* argv[])
 			 
 				for (int m= Nabc; m<= space_points+Nabc-1;m++)
 				{
-					// n2 = 2*dt*(-2*media_pump[pump[m]]+gama_nr*N0)/(2+gama_nr*dt);
-
-					D[m]=D[m] + Dup*( H[m] - H[m-1] );  //look at Taflove p. 247
+					
+					fdtd_fields[m].D=fdtd_fields[m].D + Dup*( fdtd_fields[m].H - fdtd_fields[m-1].H );  //look at Taflove p. 247
 					//if nq<>1 then
-					Pold2[m]=Pold[m];
+					fdtd_fields[m].Pold2=fdtd_fields[m].Pold;
 					//if nq<>0 then
-					Pold[m]=P[m];
+					fdtd_fields[m].Pold=fdtd_fields[m].P;
 					//here product of sqrt(eps0) added
-
-					P[m] = active_medium_params[two_level_par_index[m]].p1*P[m]-
-						active_medium_params[two_level_par_index[m]].p2*Pold2[m]+
-						active_medium_params[two_level_par_index[m]].kp*E[m]*N[m];
+					int iam =paramsIndex[m].two_level_par_index; 
+					fdtd_fields[m].P = active_medium_params[iam].p1*fdtd_fields[m].P-
+						active_medium_params[iam].p2*fdtd_fields[m].Pold2+
+						active_medium_params[iam].kp*fdtd_fields[m].E*fdtd_fields[m].N;
 					//save electric field for previous time step
-					double  Eprevt=E[m];
-					E[m]=(D[m]-active_medium_params[two_level_par_index[m]].ke*P[m])*media[eps_r[m]];
-					N[m]=active_medium_params[two_level_par_index[m]].n1*N[m]+
-						active_medium_params[two_level_par_index[m]].n2-
-						active_medium_params[two_level_par_index[m]].kn*(E[m]+Eprevt)*(P[m]-Pold[m]);
+					double  Eprevt=fdtd_fields[m].E;
+					fdtd_fields[m].E=(fdtd_fields[m].D-active_medium_params[iam].ke*fdtd_fields[m].P)*media[paramsIndex[m].eps_r];
+					fdtd_fields[m].N=active_medium_params[iam].n1*fdtd_fields[m].N+
+						active_medium_params[iam].n2-
+						active_medium_params[iam].kn*(fdtd_fields[m].E+Eprevt)*(fdtd_fields[m].P-fdtd_fields[m].Pold);
 
 				}
+
+				//insert hard source
+				//fdtd_fields[zin].E =source[nq].Ein;
 
 
 
 				// right PML electric field
 				for (int m= space_points+Nabc; m<= space_points + Nabc+ Nabc - 2; m++)
 				{
-					double Dold=D[m];
-					D[m]= d1[m-space_points-Nabc]*D[m]+(dt*c*b1[m-space_points-Nabc]/dz)*(H[m]-H[m-1]);
-					E[m]= d1[m-space_points-Nabc]*E[m]+b1[m-space_points-Nabc]*(a1[m-space_points-Nabc]*D[m]-c1[m-space_points-Nabc]*Dold);
+					double Dold=fdtd_fields[m].D;
+					int j = m-space_points-Nabc;
+					fdtd_fields[m].D= 
+						pml[j].d1*fdtd_fields[m].D+(dt*c*pml[j].b1/dz)*(fdtd_fields[m].H-fdtd_fields[m].H);
+					fdtd_fields[m].E= 
+						pml[j].d1*fdtd_fields[m].E+pml[j].b1*(pml[j].a1*fdtd_fields[m].D-pml[j].c1*Dold);
 				}
 			}
 
@@ -477,8 +475,8 @@ int main(int argc, char* argv[])
 
 				for (int ic=0;  ic <= space_points-1+Nabc+Nabc; ic++)
 				{
-					fprintf(eout,"%.15e ", E[ic]);
-					fprintf(inversion,"%.15e ", N[ic]);
+					fprintf(eout,"%.15e ", fdtd_fields[ic].E);
+					fprintf(inversion,"%.15e ", fdtd_fields[ic].N);
 					//write(polarization,' ', P[ic]);
 				}
 				fprintf(eout,"\n");
@@ -490,7 +488,7 @@ int main(int argc, char* argv[])
 				time_i++;
 			}
 
-			fprintf(etime, "%.15e\n", E[z_out_time]);
+			fprintf(etime, "%.15e\n", fdtd_fields[z_out_time].E);
 
 			//fprintf(inversion_time, "%ld\n", N[(long)(media_start+0.5*(media_end-media_start))]);
 		}
@@ -506,6 +504,7 @@ int main(int argc, char* argv[])
 	CloseFile(inversion);
 	CloseFile(polarization);
 	*/
+	free(fdtd_fields);
 	fclose(etime);   
 	fclose(inversion_time);
 	fclose(eout);
