@@ -1,6 +1,3 @@
-// twolevel_fdtd.cpp: определяет точку входа для консольного приложения.
-//
-
 #include <stdio.h>
 #include <memory.h>
 
@@ -106,8 +103,12 @@ int  read_parameters()
 
 int main(int argc, char* argv[])
 {
-	time_t start = time(NULL);
-	read_parameters();
+	clock_t start = clock();
+	if (!read_parameters())
+	{
+		printf("can't load config.txt!");
+		return 0;
+	}
 
 	int time_i = 0;
 	int Ntime = time_points / time_samps - 1 ;
@@ -124,7 +125,7 @@ int main(int argc, char* argv[])
 	double eta0 = sqrt(mu0/eps0);
 	//Tp=2*PI*10/w0;
 	double koren= sqrt(eps0);
-	double E_from_SI_to_HL=(1/3)*1e-4;
+	double E_from_SI_to_HL=1e-4/3;
 	double dab_from_SI_to_HL=1e2*3*1e9;
 	double na_from_SI_to_HL=1e-6;
 	E0= E0*E_from_SI_to_HL;
@@ -142,19 +143,19 @@ int main(int argc, char* argv[])
 
 	//allocate arrays
 	int res = 0;
-	
+
 	//store inverted epsilon data to speedup computations
 	double media[3]= {1.0,1/reflector_index,1/(0.2*reflector_index)};
 	double media_pump[3]= {0,delta,delta1};
 	two_level_params active_medium_params[2];
 
-	FdtdFields *fdtd_fields = (FdtdFields*)malloc((space_points+2*Nabc)*sizeof(FdtdFields));
-	memset(fdtd_fields, 0, (space_points+2*Nabc)*sizeof(FdtdFields));
+	FdtdFields *fdtd_fields = (FdtdFields*)malloc((space_points)*sizeof(FdtdFields));
+	memset(fdtd_fields, 0, (space_points)*sizeof(FdtdFields));
 	PMLParams *pml = (PMLParams*)malloc(Nabc*sizeof(PMLParams));
-	SourceFields * source = (SourceFields*)malloc(sizeof(SourceFields)*time_points);
-	MediaParamsIndex * paramsIndex = (MediaParamsIndex *)malloc(sizeof(MediaParamsIndex)*(space_points+2*Nabc));
-	memset(paramsIndex, 0, sizeof(MediaParamsIndex)*(space_points+2*Nabc));
-	
+	SourceFields * source = (SourceFields*)malloc(sizeof(SourceFields)*pulse_points);
+	MediaParamsIndex * paramsIndex = (MediaParamsIndex *)malloc(sizeof(MediaParamsIndex)*(space_points));
+	memset(paramsIndex, 0, sizeof(MediaParamsIndex)*(space_points));
+
 
 	//wid=round(lambda/(4*dz*sqrt(media[1])));
 	long wid2=(long)(lambda/(4*dz*sqrt(media[2])));
@@ -200,7 +201,7 @@ int main(int argc, char* argv[])
 		{
 			long media_length= (long)(media_end - media_start)*media_number;
 			//bulk media with reflecting edges
-			for (int i=0; i<=space_points-1+Nabc+Nabc; i++)
+			for (int i=0; i<space_points; i++)
 			{
 				paramsIndex[i].eps_r= 0;
 			}
@@ -217,7 +218,7 @@ int main(int argc, char* argv[])
 
 
 	FILE *eps = fopen("eps.txt","wt");
-	for(int i=0; i<space_points+2*Nabc; i++)
+	for(int i=0; i<space_points; i++)
 	{
 		fprintf(eps,"%ld\n", paramsIndex[i].eps_r);
 	}
@@ -239,69 +240,52 @@ int main(int argc, char* argv[])
 	for (int j=media_end-delta_number;j<=media_end-1;j++)
 	{
 		paramsIndex[j].pump=1;
-	}
+	}	
 
-	/*
-	for (int j= 0;j<=ref_layers-1; j++)
-	{
-	for (int i= ref_start+2*wid*j; ref_start+2*wid*j+wid;j++)
-	eps_r[i]=1;
-	for (int i= ref_start+2*wid*(ref_layers-1)+wid+ref_length+2*wid*j;i<=ref_start+2*wid*(ref_layers-1)+wid+ref_length+2*wid*j+wid;i++)
-	eps_r[i]=1;
-	}
-
-
-	for j= 0 to layers-1 do
-	for i= start+2*wid*(layers-1)+wid+length+2*wid*j to start+2*wid*(layers-1)+wid+length+2*wid*j+wid do
-	eps_r[i]=1;
-	*/
-
-	/*
-	for i=0 to space_points-1+Nabc+Nabc do
-	writeln(eps,' ', 1/(media[eps_r[i]]));
-	CloseFile(eps);
-	*/
-	
 
 	for (int i = media_start; i<=media_end-1;i++)
 	{
 		fdtd_fields[i].N=N11;
 	}
 
-	srand(  time(NULL));
+	srand( time(NULL));
 	for (int i = media_start; i<= media_end-1; i++)
 	{
 		fdtd_fields[i].P=sin(w0*i*dt/*+2*M_PI*((double)rand()/(double)RAND_MAX)*/);
 	}
 
 	FILE *pstart = fopen("po.txt","wt");
-	for(int i=0; i< space_points+2*Nabc+1; i++)
+	for(int i=0; i< space_points; i++)
 	{
 		fprintf(pstart,"%.15e\n",fdtd_fields[i].P);
 	}
 	fclose(pstart);
-	
+
 
 	double Hdelay  = 0;//-dt/2;//-dz/2/c;
 
 
 	//hyperbolic secant pulse
-	
+	FILE * fsrc = fopen("esrc.txt", "wt");
 	for(int  nq=0; nq< pulse_points; nq++)
 	{
 		double t=nq*dt;
 		//G=0.5*(t-Tp)/(Tp);
 		source[nq].Ein = E0*sin( w0*t )/cosh(10*(t-0.75*Tp)/Tp);
 		source[nq].Hin = E0*sin( w0*(t+Hdelay) )/cosh(10*(t+Hdelay-0.75*Tp)/Tp);
+		fprintf(fsrc, "%.15e\n", E0*sin( w0*t )/cosh(10*(t-0.75*Tp)/Tp)/*source[nq].Ein*/);
 
 	}
-	
-	
+	fclose(fsrc);
+
+
+
 
 	//pml parameters calculation
 	double abc_pow = 3;
 	double kmax=2;
-	double sigma_max = -(abc_pow+1)*log(0.0001)*c/(2*/*eta0*/Labc); //2e16;
+	double sigma_max = -2e16;
+	//-(abc_pow+1)*log(0.0001)*c/(2*/*eta0*/Labc); //2e16;
 	for (int i=0; i<= Nabc-1; i++)
 	{
 		pml[i].sigma =  sigma_max*pow(i/Nabc, abc_pow)/**mu0/eps0*/;
@@ -317,29 +301,10 @@ int main(int argc, char* argv[])
 	}
 
 
-	//pumping rate cmdline input
-	/*
-	if ParamCount>0 then
-	delta = StrToFloat(ParamStr(1));
-	*/
-	//precalculated media parameters
-/*
-	const double     p1=(2-omega0sqr*dt*dt)/(1+gama*dt);
-	const double    p2=(1-gama*dt)/(1+gama*dt);
-	const double p3=omega0sqr*dt*dt/(h11*omega*(1+gama*dt));
 
-	const double n1=(2-gama_nr*dt)/(2+gama_nr*dt);
-	const double n2 = 2*dt*(-2*delta+gama_nr*N0)/(2+gama_nr*dt);
-	const double n3=4*omega/(h11*omega0sqr*(2+gama_nr*dt));
-
-
-	const double kp= p3*dab;
-	const double ke= 2*na*dab;
-	const double kn= n3*dab;
-*/	
 
 	memset(active_medium_params, 0, sizeof(active_medium_params));
-	
+
 	active_medium_params[1].p1=(2-omega0sqr*dt*dt)/(1+gama*dt);
 	active_medium_params[1].p2=(1-gama*dt)/(1+gama*dt);
 	active_medium_params[1].p3=omega0sqr*dt*dt/(h11*omega*(1+gama*dt));
@@ -353,119 +318,80 @@ int main(int argc, char* argv[])
 	active_medium_params[1].ke= 2*na*dab;
 	active_medium_params[1].kn= active_medium_params[0].n3*dab;
 
-//init indices
+	//init indices
 	for (int m=media_start; m<= media_end-1;m++)
 	{
 		paramsIndex[m].two_level_par_index = 1;
 	}
 
-	
-	
+
+
 
 	//excitation pulse inserted at z = zin
-	long zin = 150;
-	
+	long zin = 200;
+
 	FILE *etime = fopen("etime.txt","wt");
 	FILE *inversion_time = fopen("inversion.txt","wt");
 	FILE	*eout = fopen("eout.txt","wt");
 	FILE	*inversion = fopen("inversion.txt","wt");
 
-	
-	printf("init completed in %d secs\n", start-time(NULL));
+
+	printf("init completed in %.0f msecs\n", ((double)clock()-(double)start)*1000/CLOCKS_PER_SEC);
 	//-------------------------------
 	//time cycle {s here
 	//-------------------------------
+	double mur_factor = (c*dt-dz)/(c*dt+dz);
 	try
 	{
 		for (int nq=0; nq<time_points; nq++)
 		{
-			double t=nq*dt;
-			//#pragma omp parallel num_threads(2)
+			double t=nq*dt;			
+
+			//main grid magnetic field
+			double Hold = fdtd_fields[space_points-2].H;
+			for (int m=0; m < space_points-1;m++)
+			{
+				fdtd_fields[m].H = fdtd_fields[m].H + Hup*( fdtd_fields[m+1].E-fdtd_fields[m].E );
+				
+			}
+			fdtd_fields[space_points-1].H=
+				Hold  +	mur_factor*(fdtd_fields[space_points-2].H - fdtd_fields[space_points-1].H);
+
+			//main grid electric field
+			
+			double Eold = fdtd_fields[1].E;
+			for (int m= 1; m<= space_points-1;m++)
 			{
 
-				// left PML magnetic field
-				for (int m= 0;m<=Nabc-1;m++)
-				{
-					int j=-m+Nabc-1;
-					double Bold = fdtd_fields[m].B;
-					fdtd_fields[m].B= pml[j].d1*fdtd_fields[m].B + (dt*c*pml[j].b1/dz)*(fdtd_fields[m+1].E-fdtd_fields[m].E); //E[m]-E[m-1]
-					fdtd_fields[m].H= pml[j].d1*fdtd_fields[m].H+pml[j].b1*(pml[j].a1*fdtd_fields[m].B-pml[j].c1*Bold);
-				}
+				fdtd_fields[m].D=fdtd_fields[m].D + Dup*( fdtd_fields[m].H - fdtd_fields[m-1].H );  //look at Taflove p. 247
+				//if nq<>1 then
+				fdtd_fields[m].Pold2=fdtd_fields[m].Pold;
+				//if nq<>0 then
+				fdtd_fields[m].Pold=fdtd_fields[m].P;
+				//here product of sqrt(eps0) added
+				int iam =paramsIndex[m].two_level_par_index; 
+				fdtd_fields[m].P = active_medium_params[iam].p1*fdtd_fields[m].P-
+					active_medium_params[iam].p2*fdtd_fields[m].Pold2+
+					active_medium_params[iam].kp*fdtd_fields[m].E*fdtd_fields[m].N;
+				//save electric field for previous time step
+				double  Eprevt=fdtd_fields[m].E;
+				fdtd_fields[m].E=(fdtd_fields[m].D-active_medium_params[iam].ke*fdtd_fields[m].P)*media[paramsIndex[m].eps_r];
+				fdtd_fields[m].N=active_medium_params[iam].n1*fdtd_fields[m].N+
+					active_medium_params[iam].n2-
+					active_medium_params[iam].kn*(fdtd_fields[m].E+Eprevt)*(fdtd_fields[m].P-fdtd_fields[m].Pold);
 
-				//main grid magnetic field
-
-				for (int m=Nabc; m<= Nabc+space_points-1;m++)
-				{
-					fdtd_fields[m].B = fdtd_fields[m].B + Hup*( fdtd_fields[m+1].E-fdtd_fields[m].E );
-					fdtd_fields[m].H = fdtd_fields[m].B;
-				}
-
-				// right PML magnetic field
-				for (int m= space_points+Nabc; m<= space_points + Nabc+ Nabc-2;m++)
-				{
-					double Bold = fdtd_fields[m].B;
-					int j = m-space_points-Nabc;
-					fdtd_fields[m].B =
-						pml[j].d1*fdtd_fields[m].B+(dt*c*pml[j].b1/dz)*(fdtd_fields[m+1].E-fdtd_fields[m].E); //E[m]-E[m-1]
-					fdtd_fields[m].H =
-						pml[j].d1*fdtd_fields[m].H+pml[j].b1*(pml[j].a1*fdtd_fields[m].B-pml[j].c1*Bold);
-				}
-
-
-				//left PML electric field
-				for (int m= 1; m<= Nabc-1; m++)
-				{
-
-					double Dold=fdtd_fields[m].D;
-					int j = -m+Nabc-1;
-					fdtd_fields[m].D= 
-						pml[j].d1*fdtd_fields[m].D+(dt*c*pml[j].b1/dz)*(fdtd_fields[m].H-fdtd_fields[m-1].H);
-					fdtd_fields[m].E=
-						pml[j].d1*fdtd_fields[m].E+pml[j].b1*(pml[j].a1*fdtd_fields[m].D-pml[j].c1*Dold);
-				}
-
-
-				//main grid electric field
-				
-			 
-				for (int m= Nabc; m<= space_points+Nabc-1;m++)
-				{
-					
-					fdtd_fields[m].D=fdtd_fields[m].D + Dup*( fdtd_fields[m].H - fdtd_fields[m-1].H );  //look at Taflove p. 247
-					//if nq<>1 then
-					fdtd_fields[m].Pold2=fdtd_fields[m].Pold;
-					//if nq<>0 then
-					fdtd_fields[m].Pold=fdtd_fields[m].P;
-					//here product of sqrt(eps0) added
-					int iam =paramsIndex[m].two_level_par_index; 
-					fdtd_fields[m].P = active_medium_params[iam].p1*fdtd_fields[m].P-
-						active_medium_params[iam].p2*fdtd_fields[m].Pold2+
-						active_medium_params[iam].kp*fdtd_fields[m].E*fdtd_fields[m].N;
-					//save electric field for previous time step
-					double  Eprevt=fdtd_fields[m].E;
-					fdtd_fields[m].E=(fdtd_fields[m].D-active_medium_params[iam].ke*fdtd_fields[m].P)*media[paramsIndex[m].eps_r];
-					fdtd_fields[m].N=active_medium_params[iam].n1*fdtd_fields[m].N+
-						active_medium_params[iam].n2-
-						active_medium_params[iam].kn*(fdtd_fields[m].E+Eprevt)*(fdtd_fields[m].P-fdtd_fields[m].Pold);
-
-				}
-
-				//insert hard source
-				//fdtd_fields[zin].E =source[nq].Ein;
-
-
-
-				// right PML electric field
-				for (int m= space_points+Nabc; m<= space_points + Nabc+ Nabc - 2; m++)
-				{
-					double Dold=fdtd_fields[m].D;
-					int j = m-space_points-Nabc;
-					fdtd_fields[m].D= 
-						pml[j].d1*fdtd_fields[m].D+(dt*c*pml[j].b1/dz)*(fdtd_fields[m].H-fdtd_fields[m].H);
-					fdtd_fields[m].E= 
-						pml[j].d1*fdtd_fields[m].E+pml[j].b1*(pml[j].a1*fdtd_fields[m].D-pml[j].c1*Dold);
-				}
 			}
+
+			fdtd_fields[0].E=
+				Eold  +	mur_factor*(fdtd_fields[1].E - fdtd_fields[0].E);
+
+			//insert hard source
+			fdtd_fields[zin].E =source[nq].Ein;
+
+
+
+
+			//}
 
 			//output of coordinate field, polarisation and inversion distributions
 			//of count=Ntime equally spaced time intervals
@@ -473,7 +399,7 @@ int main(int argc, char* argv[])
 			if (nq>Ntime*time_i)
 			{
 
-				for (int ic=0;  ic <= space_points-1+Nabc+Nabc; ic++)
+				for (int ic=0;  ic < space_points; ic++)
 				{
 					fprintf(eout,"%.15e ", fdtd_fields[ic].E);
 					fprintf(inversion,"%.15e ", fdtd_fields[ic].N);
@@ -484,7 +410,7 @@ int main(int argc, char* argv[])
 
 
 				//calculate percentage of job completed
-				printf("%ld %% completed %d sec\r",(long)(100*nq/time_points), time(NULL)-start);
+				printf("%ld %% completed %.0f msec\r",(long)(100*nq/time_points), ((double)clock()-(double)start)*1000/CLOCKS_PER_SEC);
 				time_i++;
 			}
 
@@ -505,12 +431,15 @@ int main(int argc, char* argv[])
 	CloseFile(polarization);
 	*/
 	free(fdtd_fields);
+	free(pml);
+	free(source);
+	free(paramsIndex);
 	fclose(etime);   
 	fclose(inversion_time);
 	fclose(eout);
 	fclose(inversion);
 
-	printf("\ncompleted %d sec\n", time(NULL)-start);
+	printf("all completed in %.0f msecs\n", ((double)clock()-(double)start)*1000/CLOCKS_PER_SEC);
 	return 0;
 }
 
