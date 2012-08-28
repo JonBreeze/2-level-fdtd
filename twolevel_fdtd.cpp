@@ -139,7 +139,7 @@ int main(int argc, char* argv[])
 	double omega0sqr = gama*gama+omega*omega;
 	int Nabc = 50;      //Number of PML cells
 	double Labc = Nabc*dz;
-	int pulse_points = time_points;
+	
 
 	//allocate arrays
 	int res = 0;
@@ -151,8 +151,7 @@ int main(int argc, char* argv[])
 
 	FdtdFields *fdtd_fields = (FdtdFields*)malloc((space_points)*sizeof(FdtdFields));
 	memset(fdtd_fields, 0, (space_points)*sizeof(FdtdFields));
-	PMLParams *pml = (PMLParams*)malloc(Nabc*sizeof(PMLParams));
-	SourceFields * source = (SourceFields*)malloc(sizeof(SourceFields)*pulse_points);
+	PMLParams *pml = (PMLParams*)malloc(Nabc*sizeof(PMLParams));	
 	MediaParamsIndex * paramsIndex = (MediaParamsIndex *)malloc(sizeof(MediaParamsIndex)*(space_points));
 	memset(paramsIndex, 0, sizeof(MediaParamsIndex)*(space_points));
 
@@ -217,12 +216,7 @@ int main(int argc, char* argv[])
 
 
 
-	FILE *eps = fopen("eps.txt","wt");
-	for(int i=0; i<space_points; i++)
-	{
-		fprintf(eps,"%ld\n", paramsIndex[i].eps_r);
-	}
-	fclose(eps);
+	
 
 	//media with absorbing cell
 	long delta_number=(long)((2/3)*(media_end-media_start));
@@ -243,6 +237,7 @@ int main(int argc, char* argv[])
 	}	
 
 
+//initial conditions for population inversion and polarization rate
 	for (int i = media_start; i<=media_end-1;i++)
 	{
 		fdtd_fields[i].N=N11;
@@ -251,7 +246,7 @@ int main(int argc, char* argv[])
 	srand( time(NULL));
 	for (int i = media_start; i<= media_end-1; i++)
 	{
-		fdtd_fields[i].P=sin(w0*i*dt/*+2*M_PI*((double)rand()/(double)RAND_MAX)*/);
+		fdtd_fields[i].P=0.0;//sin(w0*i*dt+2*M_PI*((double)rand()/(double)RAND_MAX));
 	}
 
 	FILE *pstart = fopen("po.txt","wt");
@@ -263,15 +258,16 @@ int main(int argc, char* argv[])
 
 
 	double Hdelay  = 0;//-dt/2;//-dz/2/c;
-
-
+	
+	int pulse_points = time_points;//2*(int)(Tp/dt);
+	SourceFields * source = (SourceFields*)malloc(sizeof(SourceFields)*pulse_points);
 	//hyperbolic secant pulse
 	FILE * fsrc = fopen("esrc.txt", "wt");
 	for(int  nq=0; nq< pulse_points; nq++)
 	{
 		double t=nq*dt;
 		//G=0.5*(t-Tp)/(Tp);
-		source[nq].Ein = E0*sin( w0*t )/cosh(10*(t-0.75*Tp)/Tp);
+		source[nq].Ein = E0*sin( w0*t );//cosh(10*(t-0.75*Tp)/Tp);
 		source[nq].Hin = E0*sin( w0*(t+Hdelay) )/cosh(10*(t+Hdelay-0.75*Tp)/Tp);
 		fprintf(fsrc, "%.15e\n", E0*sin( w0*t )/cosh(10*(t-0.75*Tp)/Tp)/*source[nq].Ein*/);
 
@@ -314,9 +310,9 @@ int main(int argc, char* argv[])
 	active_medium_params[1].n3 = 4*omega/(h11*omega0sqr*(2+gama_nr*dt));
 
 
-	active_medium_params[1].kp= active_medium_params[0].p3*dab;
+	active_medium_params[1].kp= active_medium_params[1].p3*dab;
 	active_medium_params[1].ke= 2*na*dab;
-	active_medium_params[1].kn= active_medium_params[0].n3*dab;
+	active_medium_params[1].kn= active_medium_params[1].n3*dab;
 
 	//init indices
 	for (int m=media_start; m<= media_end-1;m++)
@@ -324,7 +320,28 @@ int main(int argc, char* argv[])
 		paramsIndex[m].two_level_par_index = 1;
 	}
 
+//read epsilon two-level params and pump rate indexes from a file
+	FILE *eps = NULL;
+	eps =fopen("media.txt","rt");
+	if (eps)
+	{
+		for(int i=0; i<space_points; i++)
+		{
+			fscanf(eps,"%d%d%d\n", &paramsIndex[i].eps_r, 
+				&paramsIndex[i].two_level_par_index,
+				&paramsIndex[i].pump);
+		}
+	}
+	fclose(eps);
 
+	//write dt and dx  
+	FILE *steps = NULL;
+	steps =fopen("steps.txt","wt");
+	if (steps)
+	{
+		fprintf(steps, "%.15e\n%.15e\n", dt, dz);
+	}
+	fclose(steps);
 
 
 	//excitation pulse inserted at z = zin
@@ -386,7 +403,10 @@ int main(int argc, char* argv[])
 				Eold  +	mur_factor*(fdtd_fields[1].E - fdtd_fields[0].E);
 
 			//insert hard source
-			fdtd_fields[zin].E =source[nq].Ein;
+			if (nq<pulse_points)
+			{
+				fdtd_fields[zin].E =source[nq].Ein;
+			}
 
 
 
@@ -414,7 +434,7 @@ int main(int argc, char* argv[])
 				time_i++;
 			}
 
-			fprintf(etime, "%.15e\n", fdtd_fields[z_out_time].E);
+			fprintf(etime, "%.15e %.15e\n", fdtd_fields[z_out_time].E, fdtd_fields[(media_start+media_end)/2].N);
 
 			//fprintf(inversion_time, "%ld\n", N[(long)(media_start+0.5*(media_end-media_start))]);
 		}
@@ -423,7 +443,6 @@ int main(int argc, char* argv[])
 	{
 		printf( "%s\n", e.what());
 	}
-
 
 
 	/*CloseFile(eout);
