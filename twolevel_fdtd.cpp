@@ -246,7 +246,7 @@ int main(int argc, char* argv[])
 	srand( time(NULL));
 	for (int i = media_start; i<= media_end-1; i++)
 	{
-		fdtd_fields[i].P=0.0;//sin(w0*i*dt+2*M_PI*((double)rand()/(double)RAND_MAX));
+		fdtd_fields[i].P=sin(w0*i*dt+2*M_PI*((double)rand()/(double)RAND_MAX));
 	}
 
 	FILE *pstart = fopen("po.txt","wt");
@@ -321,9 +321,9 @@ int main(int argc, char* argv[])
 	}
 
 //read epsilon two-level params and pump rate indexes from a file
-	FILE *eps = NULL;
-	eps =fopen("media.txt","rt");
-	if (eps)
+	FILE *eps = NULL;	
+	eps =fopen("media_in.txt","rt");	
+	if (eps!=NULL)
 	{
 		for(int i=0; i<space_points; i++)
 		{
@@ -331,17 +331,29 @@ int main(int argc, char* argv[])
 				&paramsIndex[i].two_level_par_index,
 				&paramsIndex[i].pump);
 		}
+		fclose(eps);
 	}
-	fclose(eps);
+
+	FILE *fmedia = NULL;	
+	fmedia =fopen("media_out.txt","wt");	
+	for(int i=0; i<space_points; i++)
+	{
+		fprintf(fmedia,"%d %d %d\n", paramsIndex[i].eps_r, 
+			paramsIndex[i].two_level_par_index,
+			paramsIndex[i].pump);
+	}
+	fclose(fmedia);
+
+	
 
 	//write dt and dx  
 	FILE *steps = NULL;
 	steps =fopen("steps.txt","wt");
-	if (steps)
+	if (steps!=NULL)
 	{
 		fprintf(steps, "%.15e\n%.15e\n", dt, dz);
-	}
-	fclose(steps);
+		fclose(steps);
+	}	
 
 
 	//excitation pulse inserted at z = zin
@@ -403,11 +415,12 @@ int main(int argc, char* argv[])
 				Eold  +	mur_factor*(fdtd_fields[1].E - fdtd_fields[0].E);
 
 			//insert hard source
+/*
 			if (nq<pulse_points)
 			{
 				fdtd_fields[zin].E =source[nq].Ein;
 			}
-
+*/
 
 
 
