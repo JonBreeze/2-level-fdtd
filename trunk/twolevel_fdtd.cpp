@@ -111,7 +111,7 @@ int main(int argc, char* argv[])
 	}
 
 	int time_i = 0;
-	int Ntime = time_points / time_samps - 1 ;
+	int Ntime = time_points / time_samps ;
 
 	double c=3e10;
 	double h1=1.0546e-34;
@@ -139,7 +139,7 @@ int main(int argc, char* argv[])
 	double omega0sqr = gama*gama+omega*omega;
 	int Nabc = 50;      //Number of PML cells
 	double Labc = Nabc*dz;
-	
+
 
 	//allocate arrays
 	int res = 0;
@@ -216,7 +216,7 @@ int main(int argc, char* argv[])
 
 
 
-	
+
 
 	//media with absorbing cell
 	long delta_number=(long)((2/3)*(media_end-media_start));
@@ -237,7 +237,7 @@ int main(int argc, char* argv[])
 	}	
 
 
-//initial conditions for population inversion and polarization rate
+	//initial conditions for population inversion and polarization rate
 	for (int i = media_start; i<=media_end-1;i++)
 	{
 		fdtd_fields[i].N=N11;
@@ -257,19 +257,20 @@ int main(int argc, char* argv[])
 	fclose(pstart);
 
 
-	double Hdelay  = 0;//-dt/2;//-dz/2/c;
 	
+
 	int pulse_points = time_points;//2*(int)(Tp/dt);
 	SourceFields * source = (SourceFields*)malloc(sizeof(SourceFields)*pulse_points);
-	//hyperbolic secant pulse
+	
+	double Hdelay  = dt/2;
 	FILE * fsrc = fopen("esrc.txt", "wt");
 	for(int  nq=0; nq< pulse_points; nq++)
 	{
 		double t=nq*dt;
 		//G=0.5*(t-Tp)/(Tp);
 		source[nq].Ein = E0*sin( w0*t );//cosh(10*(t-0.75*Tp)/Tp);
-		source[nq].Hin = E0*sin( w0*(t+Hdelay) )/cosh(10*(t+Hdelay-0.75*Tp)/Tp);
-		fprintf(fsrc, "%.15e\n", E0*sin( w0*t )/cosh(10*(t-0.75*Tp)/Tp)/*source[nq].Ein*/);
+		source[nq].Hin = E0*sin( w0*(t+Hdelay) );//cosh(10*(t+Hdelay-0.75*Tp)/Tp);
+		fprintf(fsrc, "%.15e\n", source[nq].Ein, source[nq].Hin);
 
 	}
 	fclose(fsrc);
@@ -317,10 +318,10 @@ int main(int argc, char* argv[])
 	//init indices
 	for (int m=media_start; m<= media_end-1;m++)
 	{
-		paramsIndex[m].two_level_par_index = 1;
+		paramsIndex[m].two_level_par_index = 0;
 	}
 
-//read epsilon two-level params and pump rate indexes from a file
+	//read epsilon two-level params and pump rate indexes from a file
 	FILE *eps = NULL;	
 	eps =fopen("media_in.txt","rt");	
 	if (eps!=NULL)
@@ -344,7 +345,7 @@ int main(int argc, char* argv[])
 	}
 	fclose(fmedia);
 
-	
+
 
 	//write dt and dx  
 	FILE *steps = NULL;
@@ -358,14 +359,18 @@ int main(int argc, char* argv[])
 
 	//excitation pulse inserted at z = zin
 	long zin = 200;
+	long zin_right = 800;
 
-	FILE *etime = fopen("etime.txt","wt");
-	FILE *inversion_time = fopen("inversion.txt","wt");
-	FILE	*eout = fopen("eout.txt","wt");
-	FILE	*inversion = fopen("inversion.txt","wt");
+	FILE *etime = fopen("e_time.txt","wt");
+	FILE *inversion_time = fopen("inversion_time.txt","wt");		
 
 
 	printf("init completed in %.0f msecs\n", ((double)clock()-(double)start)*1000/CLOCKS_PER_SEC);
+/* TODO: implement auxiliary FDTD grid for source field calculation
+	double *Esrc, *Hsrc;
+	int srcLength = zin_right-zin+1;
+	Esrc = (double*)malloc(srcLength*sizeof(double));
+*/
 	//-------------------------------
 	//time cycle {s here
 	//-------------------------------
@@ -381,13 +386,16 @@ int main(int argc, char* argv[])
 			for (int m=0; m < space_points-1;m++)
 			{
 				fdtd_fields[m].H = fdtd_fields[m].H + Hup*( fdtd_fields[m+1].E-fdtd_fields[m].E );
-				
+
 			}
+			//total/scattered field correction
+			fdtd_fields[zin].H-=Hup*source[nq].Ein;
+			//apply Mur boundary conditions
 			fdtd_fields[space_points-1].H=
 				Hold  +	mur_factor*(fdtd_fields[space_points-2].H - fdtd_fields[space_points-1].H);
 
 			//main grid electric field
-			
+
 			double Eold = fdtd_fields[1].E;
 			for (int m= 1; m<= space_points-1;m++)
 			{
@@ -411,6 +419,10 @@ int main(int argc, char* argv[])
 
 			}
 
+			//total\scattered correction
+			fdtd_fields[zin].E-=Eup*source[nq].Hin;
+
+			//Mur boundary
 			fdtd_fields[0].E=
 				Eold  +	mur_factor*(fdtd_fields[1].E - fdtd_fields[0].E);
 
@@ -430,16 +442,20 @@ int main(int argc, char* argv[])
 			//of count=Ntime equally spaced time intervals
 
 			if (nq>Ntime*time_i)
-			{
-
+			{				
+				char fname[256]="";;
+				sprintf(fname,"eout%d.txt", time_i);
+				FILE	*eout = fopen(fname,"wt");
+				sprintf(fname,"inversion%d.txt", time_i);
+				FILE	*inversion = fopen(fname,"wt");
 				for (int ic=0;  ic < space_points; ic++)
-				{
-					fprintf(eout,"%.15e ", fdtd_fields[ic].E);
-					fprintf(inversion,"%.15e ", fdtd_fields[ic].N);
-					//write(polarization,' ', P[ic]);
-				}
-				fprintf(eout,"\n");
-				fprintf(inversion,"\n");
+				{					
+					fprintf(eout,"%.15e \n", fdtd_fields[ic].E);
+					fprintf(inversion,"%.15e \n", fdtd_fields[ic].N);																	
+					
+				}			
+				fclose(inversion);
+				fclose(eout);
 
 
 				//calculate percentage of job completed
@@ -447,7 +463,8 @@ int main(int argc, char* argv[])
 				time_i++;
 			}
 
-			fprintf(etime, "%.15e %.15e\n", fdtd_fields[z_out_time].E, fdtd_fields[(media_start+media_end)/2].N);
+			fprintf(etime, "%.15e\n", fdtd_fields[z_out_time].E);
+			fprintf(inversion_time, "%.15e\n", fdtd_fields[(media_start+media_end)/2].N);
 
 			//fprintf(inversion_time, "%ld\n", N[(long)(media_start+0.5*(media_end-media_start))]);
 		}
@@ -468,8 +485,6 @@ int main(int argc, char* argv[])
 	free(paramsIndex);
 	fclose(etime);   
 	fclose(inversion_time);
-	fclose(eout);
-	fclose(inversion);
 
 	printf("all completed in %.0f msecs\n", ((double)clock()-(double)start)*1000/CLOCKS_PER_SEC);
 	return 0;

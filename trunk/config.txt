@@ -9,7 +9,7 @@ media_end
 media_number
 0
 time_samps
-100
+3
 reflector start
 1000
 reflector length
