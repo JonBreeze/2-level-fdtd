@@ -207,7 +207,7 @@ int main(int argc, char* argv[])
 
 			for (int j= media_start-media_length;j<=media_end+media_length-1;j++)
 			{
-				paramsIndex[j].eps_r= 1;
+				paramsIndex[j].eps_r= 0;
 			}
 		}
 
@@ -260,23 +260,10 @@ int main(int argc, char* argv[])
 	
 
 	int pulse_points = time_points;//2*(int)(Tp/dt);
-	SourceFields * source = (SourceFields*)malloc(sizeof(SourceFields)*pulse_points);
+	SourceFields * source = (SourceFields*)malloc(sizeof(SourceFields)*space_points);
+	memset(source, 0, sizeof(SourceFields)*space_points);
 	
-	double Hdelay  = dt/2;
-	FILE * fsrc = fopen("esrc.txt", "wt");
-	for(int  nq=0; nq< pulse_points; nq++)
-	{
-		double t=nq*dt;
-		//G=0.5*(t-Tp)/(Tp);
-		source[nq].Ein = E0*sin( w0*t );//cosh(10*(t-0.75*Tp)/Tp);
-		source[nq].Hin = E0*sin( w0*(t+Hdelay) );//cosh(10*(t+Hdelay-0.75*Tp)/Tp);
-		fprintf(fsrc, "%.15e\n", source[nq].Ein, source[nq].Hin);
-
-	}
-	fclose(fsrc);
-
-
-
+	
 
 	//pml parameters calculation
 	double abc_pow = 3;
@@ -366,11 +353,7 @@ int main(int argc, char* argv[])
 
 
 	printf("init completed in %.0f msecs\n", ((double)clock()-(double)start)*1000/CLOCKS_PER_SEC);
-/* TODO: implement auxiliary FDTD grid for source field calculation
-	double *Esrc, *Hsrc;
-	int srcLength = zin_right-zin+1;
-	Esrc = (double*)malloc(srcLength*sizeof(double));
-*/
+
 	//-------------------------------
 	//time cycle {s here
 	//-------------------------------
@@ -379,27 +362,47 @@ int main(int argc, char* argv[])
 	{
 		for (int nq=0; nq<time_points; nq++)
 		{
-			double t=nq*dt;			
-
-			//main grid magnetic field
-			double Hold = fdtd_fields[space_points-2].H;
+			double t=nq*dt;	
+			
+//source time-stepping
+			double Hsrcold = source[space_points-2].Hin;
 			for (int m=0; m < space_points-1;m++)
 			{
-				fdtd_fields[m].H = fdtd_fields[m].H + Hup*( fdtd_fields[m+1].E-fdtd_fields[m].E );
-
+				source[m].Hin += Hup*(source[m+1].Ein-source[m].Ein);
 			}
-			//total/scattered field correction
-			fdtd_fields[zin].H-=Hup*source[nq].Ein;
-			//apply Mur boundary conditions
+			//Mur boundary
+			source[space_points-1].Hin=
+				Hsrcold  +	mur_factor*(source[space_points-2].Hin - source[space_points-1].Hin);
+
+			double Esrcold = source[1].Ein;
+			for (int m= 1; m<= space_points-1;m++)
+			{
+				source[m].Ein += Eup*(source[m].Hin - source[m-1].Hin);
+			}
+			//Mur boundary
+		/*	source[0].Ein=
+				Esrcold  +	mur_factor*(source[1].Ein - source[0].Ein);
+		*/
+			//hard source
+			source[0].Ein = E0*sin(w0*t);			
+
+//main grid magnetic field
+			double Hold = fdtd_fields[space_points-2].H;
+			for (int m=0; m < space_points-1;m++)
+			{				
+			
+				fdtd_fields[m].H = fdtd_fields[m].H + Hup*( fdtd_fields[m+1].E-fdtd_fields[m].E );				
+			}
+//total/scattered field correction
+			fdtd_fields[zin].H-=Hup*source[zin].Ein;
+//apply Mur boundary conditions
 			fdtd_fields[space_points-1].H=
 				Hold  +	mur_factor*(fdtd_fields[space_points-2].H - fdtd_fields[space_points-1].H);
 
-			//main grid electric field
-
+//main grid electric field
 			double Eold = fdtd_fields[1].E;
 			for (int m= 1; m<= space_points-1;m++)
 			{
-
 				fdtd_fields[m].D=fdtd_fields[m].D + Dup*( fdtd_fields[m].H - fdtd_fields[m-1].H );  //look at Taflove p. 247
 				//if nq<>1 then
 				fdtd_fields[m].Pold2=fdtd_fields[m].Pold;
@@ -420,7 +423,7 @@ int main(int argc, char* argv[])
 			}
 
 			//total\scattered correction
-			fdtd_fields[zin].E-=Eup*source[nq].Hin;
+			fdtd_fields[zin].E-=Eup*source[zin].Hin;
 
 			//Mur boundary
 			fdtd_fields[0].E=
@@ -443,20 +446,25 @@ int main(int argc, char* argv[])
 
 			if (nq>Ntime*time_i)
 			{				
-				char fname[256]="";;
+				char fname[256]="";
 				sprintf(fname,"eout%d.txt", time_i);
 				FILE	*eout = fopen(fname,"wt");
 				sprintf(fname,"inversion%d.txt", time_i);
 				FILE	*inversion = fopen(fname,"wt");
+				sprintf(fname,"esrc%d.txt", time_i);
+				FILE * fsrc = fopen(fname, "wt");	
+			
+
 				for (int ic=0;  ic < space_points; ic++)
 				{					
 					fprintf(eout,"%.15e \n", fdtd_fields[ic].E);
-					fprintf(inversion,"%.15e \n", fdtd_fields[ic].N);																	
+					fprintf(inversion,"%.15e \n", fdtd_fields[ic].N);
+					fprintf(fsrc,"%.15e \n", source[ic].Ein);
 					
 				}			
 				fclose(inversion);
 				fclose(eout);
-
+				fclose(fsrc);
 
 				//calculate percentage of job completed
 				printf("%ld %% completed %.0f msec\r",(long)(100*nq/time_points), ((double)clock()-(double)start)*1000/CLOCKS_PER_SEC);
