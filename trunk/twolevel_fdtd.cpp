@@ -260,8 +260,9 @@ int main(int argc, char* argv[])
 
 
 	int pulse_points = time_points;//2*(int)(Tp/dt);
-	SourceFields * source = (SourceFields*)malloc(sizeof(SourceFields)*space_points);
-	memset(source, 0, sizeof(SourceFields)*space_points);
+	int source_xsize = space_points+2;
+	SourceFields * source = (SourceFields*)malloc(sizeof(SourceFields)*source_xsize);
+	memset(source, 0, sizeof(SourceFields)*source_xsize);
 
 
 
@@ -370,7 +371,7 @@ int main(int argc, char* argv[])
 			source[0].Ein = E0*sin(w0*t);	
 			
 			double Esrcold = source[1].Ein;
-			for (int m= 1; m<= space_points-1;m++)
+			for (int m= 1; m < source_xsize;m++)
 			{
 				source[m].Ein += Eup*(source[m].Hin - source[m-1].Hin);
 			}
@@ -380,18 +381,18 @@ int main(int argc, char* argv[])
 			*/
 			
 
-			double Hsrcold = source[space_points-2].Hin;
-			for (int m=0; m < space_points-1;m++)
+			double Hsrcold = source[source_xsize-2].Hin;
+			for (int m=0; m < source_xsize-1;m++)
 			{
 				source[m].Hin += Hup*(source[m+1].Ein-source[m].Ein);
 			}
 			//Mur boundary
-			source[space_points-1].Hin=
-				Hsrcold  +	mur_factor*(source[space_points-2].Hin - source[space_points-1].Hin);		
+			source[source_xsize-1].Hin=
+				Hsrcold  +	mur_factor*(source[source_xsize-2].Hin - source[source_xsize-1].Hin);		
 
 //main grid electric field
 			double Eold = fdtd_fields[1].E;
-			for (int m= 1; m<= space_points-1;m++)
+			for (int m = 1; m < space_points;m++)
 			{
 				/*fdtd_fields[m].D=fdtd_fields[m].D + Dup*( fdtd_fields[m].H - fdtd_fields[m-1].H );  //look at Taflove p. 247
 				//if nq<>1 then
@@ -410,16 +411,17 @@ int main(int argc, char* argv[])
 				active_medium_params[iam].n2-
 				active_medium_params[iam].kn*(fdtd_fields[m].E+Eprevt)*(fdtd_fields[m].P-fdtd_fields[m].Pold);
 				*/
-				fdtd_fields[m].E=fdtd_fields[m].E + Eup*( fdtd_fields[m].H - fdtd_fields[m-1].H );
+				fdtd_fields[m].E += Eup*( fdtd_fields[m].H - fdtd_fields[m-1].H );
 
 			}		
 
-			//Mur boundary
+//Mur boundary
 			fdtd_fields[0].E=
 				Eold  +	mur_factor*(fdtd_fields[1].E - fdtd_fields[0].E);
 
-			//total\scattered correction
-			fdtd_fields[zin].E-=Eup*source[zin-1].Hin;
+//total\scattered correction
+			fdtd_fields[zin].E-=Eup*source[1].Hin;
+			fdtd_fields[zin_right].E+=Eup*source[zin_right - zin + 2].Hin;
 
 
 //main grid magnetic field
@@ -430,12 +432,13 @@ int main(int argc, char* argv[])
 				fdtd_fields[m].H = fdtd_fields[m].H + Hup*( fdtd_fields[m+1].E-fdtd_fields[m].E );				
 			}
 			
-			//apply Mur boundary conditions
+//apply Mur boundary conditions
 			fdtd_fields[space_points-1].H=
 				Hold  +	mur_factor*(fdtd_fields[space_points-2].H - fdtd_fields[space_points-1].H);
 			
-			//total/scattered field correction
-			fdtd_fields[zin-1].H-=Hup*source[zin].Ein;
+//total/scattered field correction
+			fdtd_fields[zin-1].H -= Hup*source[2].Ein;
+			fdtd_fields[zin_right].H += Eup*source[zin_right-zin+2].Ein;
 
 
 			//insert hard source
