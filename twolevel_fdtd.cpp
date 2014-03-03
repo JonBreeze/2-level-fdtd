@@ -17,60 +17,38 @@
 using namespace std;
 
 
-
-//global vars
-
-
-
+//vars to be read from config file
 int time_points, space_points, media_start, media_end, media_number;
 int time_samps;
 int  ref_start, ref_length, ref_layers,ref_config;
-static double omega,gama,na,delta,delta1,gama_nr,dab,N0,N11,Tp,w0,E0,step_lambda_rate;
+double omega,gama,na,delta,delta1,gama_nr,dab,N0,N11,Tp,w0,E0,step_lambda_rate;
 double reflector_index;
 int z_out_time;
 int time_i = 0;
-int Ntime = time_points / time_samps ;
 
-double c=3e10;
-double h1=1.0546e-34;
-double h11=1.0546e-27;//Plank's const for heaviside-lorentz units
 
-double lambda=2*M_PI*c/w0;
-double dz=step_lambda_rate*lambda;
-double dt=0.5*dz/c;
-double eps0=8.85e-12;
-double mu0=1.26e-6;
-double eta0 = sqrt(mu0/eps0);
-//Tp=2*PI*10/w0;
-double koren= sqrt(eps0);
-double E_from_SI_to_HL=1e-4/3;
-double dab_from_SI_to_HL=1e2*3*1e9;
-double na_from_SI_to_HL=1e-6;
-double Hup=c*dt/dz;
-double Eup= c*dt/dz;
-double Dup=c*dt/dz;
 
+
+//this values are calculated on the base of the above vars
+double dz, dt;
+double Hup, Eup, Dup;
 
 double omega0sqr = gama*gama+omega*omega;
-int Nabc = 50;      //Number of PML cells
-double Labc = Nabc*dz;
 double mur_factor = 0;
 
-//allocate arrays
-int res = 0;
 
 //store inverted epsilon data to speedup computations
-double media[3]= {1.0,1/reflector_index,1/(0.2*reflector_index)};
-double media_pump[3]= {0,delta,delta1};
+double media[3]= {1.0,1.0,1.0};
+double media_pump[3]= {0.0, 0.0, 0.0};
 two_level_params active_medium_params[2];
 
 FdtdFields *fdtd_fields = 0;
 MediaParamsIndex * paramsIndex = 0;
-int source_xsize = space_points+2;
-SourceFields * source = 0;
-int pulse_points = time_points;//2*(int)(Tp/dt);
 
-//excitation pulse inserted at z = zin
+SourceFields * source = 0;
+int source_xsize = 0;
+
+//excitation pulse inserted at z = zin and removed from zin_right
 long zin = 200;
 long zin_right = 700;
 
@@ -150,7 +128,7 @@ void mur_1d_source_grid_timestep(int xstart, int xend)
 {
     //source time-stepping
     bool is_left_bound = (xstart == 0)?true:false;
-    bool is_right_bound = (xend == space_points-1)?true:false;
+    bool is_right_bound = (xend == source_xsize-1)?true:false;
     int e_xstart = is_left_bound ? 1 : xstart;
     int h_xend = is_right_bound ? xend-1 : xend;
 
@@ -248,19 +226,40 @@ void mur_1d_main_grid_timestep(int xstart, int xend)
 
 int main(int argc, char* argv[])
 {
+
+
     clock_t start = clock();
     if (!read_parameters())
     {
         printf("can't load config.txt!");
         return 0;
     }
-    //memory allocation
+
+    int Ntime = time_points / time_samps;
+    source_xsize = space_points+2;
+
+//set medium non-resonant epsilon
+    media[0]= 1.0;
+    media[1] = 1/reflector_index;
+    media[2] = 1/(0.2*reflector_index);
+//set pumping rate
+    media_pump[0]= 0;
+    media_pump[1] = delta;
+    media_pump[2] = delta;
+//grid steps
+    dz=step_lambda_rate*(2*M_PI*c/w0);
+    dt=0.5*dz/c;
+//update coeffitients
+    Hup=c*dt/dz;
+    Eup= c*dt/dz;
+    Dup=c*dt/dz;
+//memory allocation
     fdtd_fields = (FdtdFields*)malloc((space_points)*sizeof(FdtdFields));
     memset(fdtd_fields, 0, (space_points)*sizeof(FdtdFields));
     paramsIndex = (MediaParamsIndex *)malloc(sizeof(MediaParamsIndex)*(space_points));
     memset(paramsIndex, 0, sizeof(MediaParamsIndex)*(space_points));
 
-    //convert to heaviside-lorenz units
+//convert to heaviside-lorenz units
     E0= E0*E_from_SI_to_HL;
     dab=dab*dab_from_SI_to_HL;
     na=na*na_from_SI_to_HL;
@@ -280,7 +279,7 @@ int main(int argc, char* argv[])
     }
     fclose(pstart);
 
-
+    int pulse_points = time_points;
     source = (SourceFields*)malloc(sizeof(SourceFields)*source_xsize);
     memset(source, 0, sizeof(SourceFields)*source_xsize);
 
@@ -336,7 +335,6 @@ int main(int argc, char* argv[])
         fprintf(steps, "time step=%.15e\nspace step=%.15e\nCourant factor=%.15e\n", dt, dz, c*dt/dz);
         fclose(steps);
     }
-
 
     FILE *etime = fopen("e_time.txt","wt");
     FILE *inversion_time = fopen("inversion_time.txt","wt");
