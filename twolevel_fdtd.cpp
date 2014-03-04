@@ -33,8 +33,8 @@ int time_i = 0;
 double dz, dt;
 double Hup, Eup, Dup;
 
-double omega0sqr = gama*gama+omega*omega;
-double mur_factor = 0;
+double omega0sqr = 0.0;
+double mur_factor = 0.0;
 
 
 //store inverted epsilon data to speedup computations
@@ -281,6 +281,9 @@ int main(int argc, char* argv[])
 
     int pulse_points = time_points;
     source = (SourceFields*)malloc(sizeof(SourceFields)*source_xsize);
+
+
+    omega0sqr = gama*gama+omega*omega;
     memset(source, 0, sizeof(SourceFields)*source_xsize);
 
     memset(active_medium_params, 0, sizeof(active_medium_params));
@@ -303,7 +306,7 @@ int main(int argc, char* argv[])
         paramsIndex[m].two_level_par_index = 1;
     }
 
-    //read epsilon two-level params and pump rate indexes from a file
+    //read epsilon two-level params and pump rate indices from a file
     FILE *eps = NULL;
     eps =fopen("media_in.txt","rt");
     if (eps!=NULL)
@@ -340,6 +343,8 @@ int main(int argc, char* argv[])
     FILE *inversion_time = fopen("inversion_time.txt","wt");
 
 
+
+
     printf("init completed in %.0f msecs\n", ((double)clock()-(double)start)*1000/CLOCKS_PER_SEC);
 
 
@@ -358,7 +363,8 @@ int main(int argc, char* argv[])
             //total/scattered field correction on main grid must be used
             if (nq<pulse_points)
             {
-                fdtd_fields[zin].E =source[nq].Ein;
+                double time = nq*dt;
+                fdtd_fields[zin].E = E0*exp(-time*time/(Tp*Tp))*sin(w0*time);
             }
             //}
 
