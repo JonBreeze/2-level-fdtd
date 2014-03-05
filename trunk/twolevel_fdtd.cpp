@@ -49,7 +49,7 @@ SourceFields * source = 0;
 int source_xsize = 0;
 
 //excitation pulse inserted at z = zin and removed from zin_right
-long zin = 200;
+long zin = 500;
 long zin_right = 700;
 
 void readln(FILE * f)
@@ -145,7 +145,7 @@ void mur_1d_source_grid_timestep(int xstart, int xend)
     }
 
     double Hsrcold = source[source_xsize-2].Hin;
-    for (int m=0; m <= h_xend; m++)
+    for (int m=0; m < source_xsize-1; m++)
     {
         source[m].Hin += Hup*(source[m+1].Ein-source[m].Ein);
     }
@@ -361,10 +361,13 @@ int main(int argc, char* argv[])
             //insert hard source into the main_grid
             //TODO: hard source should be on the source's grid and
             //total/scattered field correction on main grid must be used
+
+            mur_1d_source_grid_timestep(0, source_xsize-1);
             if (nq<pulse_points)
             {
                 double time = nq*dt;
-                fdtd_fields[zin].E = E0*exp(-time*time/(Tp*Tp))*sin(w0*time);
+                source[zin].Ein = E0*exp(-(time-Tp)*(time-Tp)/(Tp*Tp))*sin(w0*time);
+                fprintf(inversion_time, "%.15e\n", source[zin].Ein);
             }
             //}
 
@@ -403,9 +406,8 @@ int main(int argc, char* argv[])
             }
 
             fprintf(etime, "%.15e\n", fdtd_fields[z_out_time].E);
-            fprintf(inversion_time, "%.15e\n", fdtd_fields[(media_start+media_end)/2].N);
+            //fprintf(inversion_time, "%.15e\n", fdtd_fields[(media_start+media_end)/2].N);
 
-            //fprintf(inversion_time, "%ld\n", N[(long)(media_start+0.5*(media_end-media_start))]);
         }
     }
     catch (exception e)
