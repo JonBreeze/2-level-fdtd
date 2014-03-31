@@ -124,7 +124,7 @@ int  read_parameters()
 
 }
 
-void mur_1d_source_grid_timestep(int xstart, int xend)
+void mur_1d_source_grid_timestep(int xstart, int xend, double atime)
 {
     //source time-stepping
     bool is_left_bound = (xstart == 0)?true:false;
@@ -132,28 +132,32 @@ void mur_1d_source_grid_timestep(int xstart, int xend)
     int e_xstart = is_left_bound ? 1 : xstart;
     int h_xend = is_right_bound ? xend-1 : xend;
 
-    double Esrcold = source[1].Ein;
-    for (int m= e_xstart; m < xend; m++)
+
+    source[zin].Ein = E0*exp(-(atime-Tp)*(atime-Tp)/(Tp*Tp))*sin(w0*atime);
+
+
+    double Esrcold_left = source[1].Ein;
+
+    for (int m= e_xstart; m <= xend; m++)
     {
         source[m].Ein += Eup*(source[m].Hin - source[m-1].Hin);
     }
-    //Mur boundary
+//Mur boundary for E field
     if (is_left_bound)
     {
         source[0].Ein=
-                Esrcold  +	mur_factor*(source[1].Ein - source[0].Ein);
+                Esrcold_left  +	mur_factor*(source[1].Ein - source[0].Ein);
     }
-
-    double Hsrcold = source[source_xsize-2].Hin;
-    for (int m=0; m < source_xsize-1; m++)
+    double Hsrcold_right = source[source_xsize-2].Hin;
+    for (int m=0; m <= h_xend; m++)
     {
         source[m].Hin += Hup*(source[m+1].Ein-source[m].Ein);
     }
-    //Mur boundary
+//Mur boundary for H field
     if (is_right_bound)
     {
-        source[source_xsize-1].Hin=
-                Hsrcold  +	mur_factor*(source[source_xsize-2].Hin - source[source_xsize-1].Hin);
+        source[source_xsize-1].Hin =
+                Hsrcold_right - mur_factor*(source[source_xsize-1].Hin - source[source_xsize-2].Hin);
     }
 }
 
@@ -203,7 +207,7 @@ void mur_1d_main_grid_timestep(int xstart, int xend)
 
     //main grid magnetic field
     double Hold = fdtd_fields[space_points-2].H;
-    for (int m=0; m < h_xend; m++)
+    for (int m=0; m <= h_xend; m++)
     {
         fdtd_fields[m].H = fdtd_fields[m].H + Hup*( fdtd_fields[m+1].E-fdtd_fields[m].E );
     }
@@ -212,7 +216,7 @@ void mur_1d_main_grid_timestep(int xstart, int xend)
     if (is_right_bound)
     {
         fdtd_fields[space_points-1].H=
-                Hold  +	mur_factor*(fdtd_fields[space_points-2].H - fdtd_fields[space_points-1].H);
+                Hold  -	mur_factor*(fdtd_fields[space_points-2].H - fdtd_fields[space_points-1].H);
     }
 
     //total/scattered field correction
@@ -279,7 +283,6 @@ int main(int argc, char* argv[])
     }
     fclose(pstart);
 
-    int pulse_points = time_points;
     source = (SourceFields*)malloc(sizeof(SourceFields)*source_xsize);
 
 
@@ -356,20 +359,16 @@ int main(int argc, char* argv[])
     {
         for (int nq=0; nq<time_points; nq++)
         {
-            //TODO: add source time step function call
-            mur_1d_main_grid_timestep(0,space_points-1);
-            //insert hard source into the main_grid
+
+
+            double time = nq*dt;
+           // mur_1d_main_grid_timestep(0,space_points-1);
+
             //TODO: hard source should be on the source's grid and
             //total/scattered field correction on main grid must be used
 
-            mur_1d_source_grid_timestep(0, source_xsize-1);
-            if (nq<pulse_points)
-            {
-                double time = nq*dt;
-                source[zin].Ein = E0*exp(-(time-Tp)*(time-Tp)/(Tp*Tp))*sin(w0*time);
-                fprintf(inversion_time, "%.15e\n", source[zin].Ein);
-            }
-            //}
+            mur_1d_source_grid_timestep(0, source_xsize-1, time);
+
 
             //output of coordinate field, polarisation and inversion distributions
             //of count=Ntime equally spaced time intervals
