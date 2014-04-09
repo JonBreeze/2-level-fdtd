@@ -6,7 +6,9 @@
 #include <stdlib.h>
 #include <time.h>
 #include <exception>
-//#include <thread>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
 #include "twolevel_fdtd.h"
 
 
@@ -25,6 +27,7 @@ double omega,gama,na,delta,delta1,gama_nr,dab,N0,N11,Tp,w0,E0,step_lambda_rate;
 double reflector_index;
 int z_out_time;
 int time_i = 0;
+
 
 
 
@@ -49,13 +52,24 @@ SourceFields * source = 0;
 int source_xsize = 0;
 
 //excitation pulse inserted at z = zin and removed from zin_right
-long zin = 500;
+long zin = 50;
 long zin_right = 700;
+
+
+clock_t start;
+
+
+
+mutex mx;
+condition_variable cv;
+bool data_ready = false;
+bool file_written = true;
 
 void readln(FILE * f)
 {
     while (fgetc(f) != '\n');
 }
+
 
 int  read_parameters()
 {
@@ -126,14 +140,12 @@ int  read_parameters()
 
 void mur_1d_source_grid_timestep(int xstart, int xend, double atime)
 {
+
     //source time-stepping
     bool is_left_bound = (xstart == 0)?true:false;
     bool is_right_bound = (xend == source_xsize-1)?true:false;
     int e_xstart = is_left_bound ? 1 : xstart;
     int h_xend = is_right_bound ? xend-1 : xend;
-
-
-    source[zin].Ein = E0*exp(-(atime-Tp)*(atime-Tp)/(Tp*Tp))*sin(w0*atime);
 
 
     double Esrcold_left = source[1].Ein;
@@ -142,18 +154,21 @@ void mur_1d_source_grid_timestep(int xstart, int xend, double atime)
     {
         source[m].Ein += Eup*(source[m].Hin - source[m-1].Hin);
     }
-//Mur boundary for E field
+    //Mur boundary for E field
     if (is_left_bound)
     {
         source[0].Ein=
                 Esrcold_left  +	mur_factor*(source[1].Ein - source[0].Ein);
     }
+
+    source[zin].Ein = E0*exp(-(atime/Tp-1)*(atime/Tp-1))*sin(w0*atime);
+
     double Hsrcold_right = source[source_xsize-2].Hin;
     for (int m=0; m <= h_xend; m++)
     {
         source[m].Hin += Hup*(source[m+1].Ein-source[m].Ein);
     }
-//Mur boundary for H field
+    //Mur boundary for H field
     if (is_right_bound)
     {
         source[source_xsize-1].Hin =
@@ -228,42 +243,124 @@ void mur_1d_main_grid_timestep(int xstart, int xend)
 }
 
 
+void thread_func()
+{
+    unique_lock<std::mutex> ulock(mx);
+    for (int nq=0; nq<time_points; nq++)
+    {
+
+        while (!file_written)
+        {
+            cv.wait(ulock);
+        }
+        printf("fdtd thread nq=%d\n", nq);
+        double time = nq*dt;
+        // mur_1d_main_grid_timestep(0,space_points-1);
+
+        //TODO: hard source should be on the source's grid and
+        //total/scattered field correction on main grid must be used
+
+        mur_1d_source_grid_timestep( 0, source_xsize-1, time);
+        data_ready = true;
+        file_written = false;
+        cv.notify_one();
+    }
+}
+
+void file_thread_func()
+{
+    unique_lock<std::mutex> ulock(mx);
+    FILE *etime = fopen("e_time.txt","wt");
+    FILE *inversion_time = fopen("inversion_time.txt","wt");
+    int Ntime = time_points / time_samps;
+    for (int nq=0; nq<time_points; nq++)
+    {
+        //output of coordinate field, polarisation and inversion distributions
+        //of count=Ntime equally spaced time intervals
+        while (!data_ready)
+        {
+            cv.wait(ulock);
+        }
+        printf("file thread nq=%d\n", nq);
+
+        if (nq>Ntime*time_i)
+        {
+            char fname[256]="";
+            sprintf(fname,"eout%d.txt", time_i);
+            FILE	*eout = fopen(fname,"wt");
+            sprintf(fname,"inversion%d.txt", time_i);
+            FILE	*inversion = fopen(fname,"wt");
+            sprintf(fname,"esrc%d.txt", time_i);
+            FILE * fsrc = fopen(fname, "wt");
+            sprintf(fname,"polarization%d.txt", time_i);
+            FILE * fpol = fopen(fname, "wt");
+
+
+            for (int ic=0;  ic < space_points; ic++)
+            {
+                fprintf(eout,"%.15e \n", fdtd_fields[ic].E);
+                fprintf(inversion,"%.15e \n", fdtd_fields[ic].N);
+                fprintf(fsrc,"%.15e \n", source[ic].Ein);
+                fprintf(fpol,"%.15e \n", fdtd_fields[ic].P);
+
+            }
+            fclose(inversion);
+            fclose(eout);
+            fclose(fsrc);
+            fclose(fpol);
+
+            //calculate percentage of job completed
+            printf("%ld %% completed %.0f msec\r",(long)(100*nq/time_points), ((double)clock()-(double)start)*1000/CLOCKS_PER_SEC);
+            time_i++;
+        }
+
+        fprintf(etime, "%.15e\n", fdtd_fields[z_out_time].E);
+        //fprintf(inversion_time, "%.15e\n", fdtd_fields[(media_start+media_end)/2].N);
+        file_written = true;
+        data_ready = false;
+        cv.notify_one();
+    }
+    fclose(etime);
+    fclose(inversion_time);
+}
+
+
 int main(int argc, char* argv[])
 {
 
 
-    clock_t start = clock();
+    start = clock();
     if (!read_parameters())
     {
         printf("can't load config.txt!");
         return 0;
     }
 
-    int Ntime = time_points / time_samps;
+
     source_xsize = space_points+2;
 
-//set medium non-resonant epsilon
+    //set medium non-resonant epsilon
     media[0]= 1.0;
     media[1] = 1/reflector_index;
     media[2] = 1/(0.2*reflector_index);
-//set pumping rate
+    //set pumping rate
     media_pump[0]= 0;
     media_pump[1] = delta;
     media_pump[2] = delta;
-//grid steps
+    //grid steps
     dz=step_lambda_rate*(2*M_PI*c/w0);
     dt=0.5*dz/c;
-//update coeffitients
+    //update coeffitients
     Hup=c*dt/dz;
     Eup= c*dt/dz;
     Dup=c*dt/dz;
-//memory allocation
+    //memory allocation
     fdtd_fields = (FdtdFields*)malloc((space_points)*sizeof(FdtdFields));
     memset(fdtd_fields, 0, (space_points)*sizeof(FdtdFields));
     paramsIndex = (MediaParamsIndex *)malloc(sizeof(MediaParamsIndex)*(space_points));
     memset(paramsIndex, 0, sizeof(MediaParamsIndex)*(space_points));
 
-//convert to heaviside-lorenz units
+    //convert to heaviside-lorenz units
     E0= E0*E_from_SI_to_HL;
     dab=dab*dab_from_SI_to_HL;
     na=na*na_from_SI_to_HL;
@@ -342,13 +439,11 @@ int main(int argc, char* argv[])
         fclose(steps);
     }
 
-    FILE *etime = fopen("e_time.txt","wt");
-    FILE *inversion_time = fopen("inversion_time.txt","wt");
-
 
 
 
     printf("init completed in %.0f msecs\n", ((double)clock()-(double)start)*1000/CLOCKS_PER_SEC);
+
 
 
     //-------------------------------
@@ -357,57 +452,11 @@ int main(int argc, char* argv[])
     mur_factor = (c*dt-dz)/(c*dt+dz);
     try
     {
-        for (int nq=0; nq<time_points; nq++)
-        {
+        std::thread th( thread_func);
+        std::thread file_th(file_thread_func);
 
-
-            double time = nq*dt;
-           // mur_1d_main_grid_timestep(0,space_points-1);
-
-            //TODO: hard source should be on the source's grid and
-            //total/scattered field correction on main grid must be used
-
-            mur_1d_source_grid_timestep(0, source_xsize-1, time);
-
-
-            //output of coordinate field, polarisation and inversion distributions
-            //of count=Ntime equally spaced time intervals
-
-            if (nq>Ntime*time_i)
-            {
-                char fname[256]="";
-                sprintf(fname,"eout%d.txt", time_i);
-                FILE	*eout = fopen(fname,"wt");
-                sprintf(fname,"inversion%d.txt", time_i);
-                FILE	*inversion = fopen(fname,"wt");
-                sprintf(fname,"esrc%d.txt", time_i);
-                FILE * fsrc = fopen(fname, "wt");
-                sprintf(fname,"polarization%d.txt", time_i);
-                FILE * fpol = fopen(fname, "wt");
-
-
-                for (int ic=0;  ic < space_points; ic++)
-                {
-                    fprintf(eout,"%.15e \n", fdtd_fields[ic].E);
-                    fprintf(inversion,"%.15e \n", fdtd_fields[ic].N);
-                    fprintf(fsrc,"%.15e \n", source[ic].Ein);
-                    fprintf(fpol,"%.15e \n", fdtd_fields[ic].P);
-
-                }
-                fclose(inversion);
-                fclose(eout);
-                fclose(fsrc);
-                fclose(fpol);
-
-                //calculate percentage of job completed
-                printf("%ld %% completed %.0f msec\r",(long)(100*nq/time_points), ((double)clock()-(double)start)*1000/CLOCKS_PER_SEC);
-                time_i++;
-            }
-
-            fprintf(etime, "%.15e\n", fdtd_fields[z_out_time].E);
-            //fprintf(inversion_time, "%.15e\n", fdtd_fields[(media_start+media_end)/2].N);
-
-        }
+        th.join();
+        file_th.join();
     }
     catch (exception e)
     {
@@ -422,8 +471,6 @@ int main(int argc, char* argv[])
     free(fdtd_fields);
     free(source);
     free(paramsIndex);
-    fclose(etime);
-    fclose(inversion_time);
 
     printf("all completed in %.0f msecs\n", ((double)clock()-(double)start)*1000/CLOCKS_PER_SEC);
     return 0;
