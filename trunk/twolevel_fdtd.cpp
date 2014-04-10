@@ -9,6 +9,7 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <atomic>
 #include "twolevel_fdtd.h"
 
 
@@ -62,8 +63,11 @@ clock_t start;
 
 mutex mx;
 condition_variable cv;
-bool data_ready = false;
+condition_variable time_step_cv;
+int total_thread_count = 1;
+int working_thread_count(total_thread_count);
 bool file_written = true;
+
 
 void readln(FILE * f)
 {
@@ -243,16 +247,19 @@ void mur_1d_main_grid_timestep(int xstart, int xend)
 }
 
 
-void thread_func()
+void thread_func(int xstart, int xend)
 {
     unique_lock<std::mutex> ulock(mx);
+    printf("fdtd thread: after ulock\n");
+
     for (int nq=0; nq<time_points; nq++)
     {
-
+        printf("before lock: fdtd thread nq=%d\n", nq);
         while (!file_written)
         {
             cv.wait(ulock);
         }
+
         printf("fdtd thread nq=%d\n", nq);
         double time = nq*dt;
         // mur_1d_main_grid_timestep(0,space_points-1);
@@ -260,16 +267,26 @@ void thread_func()
         //TODO: hard source should be on the source's grid and
         //total/scattered field correction on main grid must be used
 
-        mur_1d_source_grid_timestep( 0, source_xsize-1, time);
-        data_ready = true;
-        file_written = false;
-        cv.notify_one();
+        mur_1d_source_grid_timestep( xstart, xend, time);
+        working_thread_count--;
+        if (0==working_thread_count)
+        {
+            file_written = false;
+            cv.notify_all();
+            time_step_cv.notify_all();
+        }
+        printf("fdtd thread : working_thread_count=%d\n",static_cast<int>(working_thread_count));
+        while (working_thread_count > 0)
+        {
+            time_step_cv.wait(ulock);
+        }
     }
 }
 
 void file_thread_func()
-{
+{    
     unique_lock<std::mutex> ulock(mx);
+    printf("file thread: after ulock\n");
     FILE *etime = fopen("e_time.txt","wt");
     FILE *inversion_time = fopen("inversion_time.txt","wt");
     int Ntime = time_points / time_samps;
@@ -277,7 +294,8 @@ void file_thread_func()
     {
         //output of coordinate field, polarisation and inversion distributions
         //of count=Ntime equally spaced time intervals
-        while (!data_ready)
+        printf("before lock: file thread nq=%d\n", nq);
+        while (working_thread_count > 0)
         {
             cv.wait(ulock);
         }
@@ -317,8 +335,8 @@ void file_thread_func()
         fprintf(etime, "%.15e\n", fdtd_fields[z_out_time].E);
         //fprintf(inversion_time, "%.15e\n", fdtd_fields[(media_start+media_end)/2].N);
         file_written = true;
-        data_ready = false;
-        cv.notify_one();
+        working_thread_count = total_thread_count;
+        cv.notify_all();
     }
     fclose(etime);
     fclose(inversion_time);
@@ -452,10 +470,17 @@ int main(int argc, char* argv[])
     mur_factor = (c*dt-dz)/(c*dt+dz);
     try
     {
-        std::thread th( thread_func);
+        total_thread_count = 2;
+        working_thread_count = total_thread_count;
+        printf("running %d threads\n", total_thread_count);
+        std::thread th( thread_func, 0, source_xsize/2);
+        std::thread th1( thread_func, source_xsize/2+1, source_xsize-1);
         std::thread file_th(file_thread_func);
 
+
+
         th.join();
+        th1.join();
         file_th.join();
     }
     catch (exception e)
